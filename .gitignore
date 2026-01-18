@@ -18,6 +18,9 @@ config.json
 # Dependency directories
 vendor/
 
+# Build directory
+.build/
+
 # Go workspace file
 go.work
 

@@ -23,13 +23,14 @@ $(LIB_NAME): preload.c
 
 $(BINARY_NAME): $(LIB_NAME) *.go
 	@echo "Building $(BINARY_NAME)..."
-	@mkdir -p /tmp/tailproxy-build
-	@TMPDIR=/tmp/tailproxy-build GOCACHE=/tmp/tailproxy-build/cache go build -o $(BINARY_NAME) main.go config.go proxy.go
+	@mkdir -p .build
+	@TMPDIR=.build GOCACHE=.build/cache go build -o $(BINARY_NAME) main.go config.go proxy.go
 	@echo "Build complete: $(BINARY_NAME)"
 
 clean:
 	@echo "Cleaning up..."
 	@rm -f $(BINARY_NAME) $(LIB_NAME)
+	@rm -rf .build
 	@go clean -cache -testcache
 	@echo "Clean complete"
 
