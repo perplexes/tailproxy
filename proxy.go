@@ -167,11 +167,13 @@ func (p *ProxyServer) StartWithReady(ctx context.Context, ready chan<- struct{})
 
 		// Find the exit node by hostname or IP
 		var exitNodeIP string
+		var peerOnline bool
 		for _, peer := range status.Peer {
 			if peer.HostName == p.config.ExitNode || peer.DNSName == p.config.ExitNode ||
 				peer.DNSName == p.config.ExitNode+"."+status.MagicDNSSuffix {
 				if len(peer.TailscaleIPs) > 0 {
 					exitNodeIP = peer.TailscaleIPs[0].String()
+					peerOnline = peer.Online
 					break
 				}
 			}
@@ -179,13 +181,18 @@ func (p *ProxyServer) StartWithReady(ctx context.Context, ready chan<- struct{})
 			for _, ip := range peer.TailscaleIPs {
 				if ip.String() == p.config.ExitNode {
 					exitNodeIP = ip.String()
+					peerOnline = peer.Online
 					break
 				}
 			}
 		}
 
 		if exitNodeIP == "" {
-			return fmt.Errorf("exit node %q not found in peers", p.config.ExitNode)
+			return fmt.Errorf("exit node %q not found in peers (is it in your tailnet?)", p.config.ExitNode)
+		}
+
+		if !peerOnline {
+			return fmt.Errorf("exit node %q is offline (cannot route traffic)", p.config.ExitNode)
 		}
 
 		if p.config.Verbose {
@@ -203,8 +210,28 @@ func (p *ProxyServer) StartWithReady(ctx context.Context, ready chan<- struct{})
 			return fmt.Errorf("failed to set exit node: %w", err)
 		}
 
+		// Verify the exit node is actually active
+		time.Sleep(500 * time.Millisecond) // Give it a moment to apply
+		status, err = lc.Status(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to verify exit node status: %w", err)
+		}
+
+		if status.ExitNodeStatus == nil {
+			return fmt.Errorf("exit node configuration failed: exit node not active")
+		}
+
+		if status.ExitNodeStatus.TailscaleIPs == nil || len(status.ExitNodeStatus.TailscaleIPs) == 0 ||
+			status.ExitNodeStatus.TailscaleIPs[0].String() != exitNodeIP {
+			return fmt.Errorf("exit node configuration failed: expected %s, got different or no exit node", exitNodeIP)
+		}
+
+		if !status.ExitNodeStatus.Online {
+			return fmt.Errorf("exit node %q became offline during configuration", p.config.ExitNode)
+		}
+
 		if p.config.Verbose {
-			log.Printf("Exit node configured successfully")
+			log.Printf("Exit node %s verified and active", p.config.ExitNode)
 		}
 	}
 
