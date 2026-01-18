@@ -1,6 +1,6 @@
 # TailProxy
 
-A Go-based proxychains alternative that routes **any** application's traffic through a Tailscale network and exit node using `tsnet` and `LD_PRELOAD`.
+A Go-based proxychains alternative that routes **any** application's traffic through a Tailscale network and exit node using `tsnet` and `LD_PRELOAD`. Useful if you're in an environment where you can't install tailscale (like https://sprites.dev) and you want to access machines/apps on your tailnet, or want to route traffic through an exit node you control (much faster than trying to setup a socks proxy somewhere).
 
 ## Features
 
