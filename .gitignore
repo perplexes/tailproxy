@@ -1,0 +1,33 @@
+# Binaries
+tailproxy
+*.exe
+*.dll
+libtailproxy.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Config files with secrets
+config.json
+.env
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

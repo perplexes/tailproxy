@@ -1,0 +1,7 @@
+{
+  "exit_node": "exit-node-hostname",
+  "hostname": "tailproxy",
+  "authkey": "",
+  "proxy_port": 1080,
+  "verbose": false
+}
