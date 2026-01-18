@@ -14,12 +14,16 @@ import (
 )
 
 var (
-	exitNode   = flag.String("exit-node", "", "Tailscale exit node to use (hostname or IP)")
-	configFile = flag.String("config", "", "Path to configuration file")
-	hostname   = flag.String("hostname", "tailproxy", "Hostname for this tsnet node")
-	authKey    = flag.String("authkey", "", "Tailscale auth key (optional, for unattended setup)")
-	proxyPort  = flag.Int("port", 1080, "SOCKS5 proxy port")
-	verbose    = flag.Bool("verbose", false, "Verbose logging")
+	exitNode         = flag.String("exit-node", "", "Tailscale exit node to use (hostname or IP)")
+	configFile       = flag.String("config", "", "Path to configuration file")
+	hostname         = flag.String("hostname", "tailproxy", "Hostname for this tsnet node")
+	authKey          = flag.String("authkey", "", "Tailscale auth key (optional, for unattended setup)")
+	proxyPort        = flag.Int("port", 1080, "SOCKS5 proxy port")
+	verbose          = flag.Bool("verbose", false, "Verbose logging")
+	exportListeners  = flag.Bool("export-listeners", false, "Export bound ports via tsnet")
+	exportAllowPorts = flag.String("export-allow-ports", "", "Comma-separated ports or ranges to allow (e.g. '3000,8080,10000-10100')")
+	exportDenyPorts  = flag.String("export-deny-ports", "", "Comma-separated ports or ranges to deny")
+	exportMax        = flag.Int("export-max", 32, "Maximum number of simultaneous exported ports")
 )
 
 func init() {
@@ -56,11 +60,15 @@ func main() {
 		}
 	} else {
 		config = &Config{
-			ExitNode: *exitNode,
-			Hostname: *hostname,
-			AuthKey:  *authKey,
-			ProxyPort: *proxyPort,
-			Verbose:  *verbose,
+			ExitNode:         *exitNode,
+			Hostname:         *hostname,
+			AuthKey:          *authKey,
+			ProxyPort:        *proxyPort,
+			Verbose:          *verbose,
+			ExportListeners:  *exportListeners,
+			ExportAllowPorts: *exportAllowPorts,
+			ExportDenyPorts:  *exportDenyPorts,
+			ExportMax:        *exportMax,
 		}
 	}
 
@@ -73,6 +81,18 @@ func main() {
 	}
 	if *authKey != "" {
 		config.AuthKey = *authKey
+	}
+	if flag.Lookup("export-listeners").Value.String() != flag.Lookup("export-listeners").DefValue {
+		config.ExportListeners = *exportListeners
+	}
+	if *exportAllowPorts != "" {
+		config.ExportAllowPorts = *exportAllowPorts
+	}
+	if *exportDenyPorts != "" {
+		config.ExportDenyPorts = *exportDenyPorts
+	}
+	if *exportMax != 32 {
+		config.ExportMax = *exportMax
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -112,6 +132,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "SOCKS5 proxy running on 127.0.0.1:%d\n", config.ProxyPort)
 		if config.ExitNode != "" {
 			fmt.Fprintf(os.Stderr, "Using exit node: %s\n", config.ExitNode)
+		}
+		if config.ExportListeners {
+			fmt.Fprintf(os.Stderr, "Export listeners mode: enabled\n")
 		}
 		fmt.Fprintf(os.Stderr, "Press Ctrl+C to stop\n")
 
@@ -162,6 +185,14 @@ func main() {
 		env = append(env, "TAILPROXY_VERBOSE=1")
 	}
 
+	// Add export listener configuration if enabled
+	if config.ExportListeners {
+		env = append(env,
+			"TAILPROXY_EXPORT_LISTENERS=1",
+			fmt.Sprintf("TAILPROXY_CONTROL_SOCK=%s", proxy.GetControlSocketPath()),
+		)
+	}
+
 	cmd.Env = env
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -177,6 +208,7 @@ func main() {
 
 	// Cancel context to stop proxy
 	cancel()
+	proxy.Stop()
 
 	// Wait for proxy to finish
 	select {

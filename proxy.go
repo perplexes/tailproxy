@@ -18,10 +18,12 @@ import (
 )
 
 type ProxyServer struct {
-	config  *Config
-	server  *tsnet.Server
-	mu      sync.Mutex
-	dialer  *net.Dialer
+	config          *Config
+	server          *tsnet.Server
+	mu              sync.Mutex
+	dialer          *net.Dialer
+	exporterManager *ExporterManager
+	controlSockPath string
 }
 
 func getStateDir(hostname string) string {
@@ -64,10 +66,18 @@ func NewProxyServer(config *Config) (*ProxyServer, error) {
 		srv.AuthKey = config.AuthKey
 	}
 
-	return &ProxyServer{
-		config: config,
-		server: srv,
-	}, nil
+	p := &ProxyServer{
+		config:          config,
+		server:          srv,
+		controlSockPath: filepath.Join(stateDir, "control.sock"),
+	}
+
+	// Create exporter manager if export mode is enabled
+	if config.ExportListeners {
+		p.exporterManager = NewExporterManager(config, srv)
+	}
+
+	return p, nil
 }
 
 func (p *ProxyServer) waitForAuth(ctx context.Context, lc *tailscale.LocalClient) error {
@@ -121,6 +131,16 @@ func (p *ProxyServer) Start(ctx context.Context) error {
 	return p.StartWithReady(ctx, nil)
 }
 
+func (p *ProxyServer) GetControlSocketPath() string {
+	return p.controlSockPath
+}
+
+func (p *ProxyServer) Stop() {
+	if p.exporterManager != nil {
+		p.exporterManager.Stop()
+	}
+}
+
 func (p *ProxyServer) StartWithReady(ctx context.Context, ready chan<- struct{}) error {
 	// Suppress noisy tsnet startup messages unless verbose
 	var originalOutput io.Writer
@@ -151,6 +171,16 @@ func (p *ProxyServer) StartWithReady(ctx context.Context, ready chan<- struct{})
 	// Restore log output after tsnet startup noise
 	if originalOutput != nil {
 		log.SetOutput(originalOutput)
+	}
+
+	// Start exporter control socket if enabled
+	if p.config.ExportListeners && p.exporterManager != nil {
+		if err := p.exporterManager.StartControlSocket(p.controlSockPath); err != nil {
+			return fmt.Errorf("failed to start control socket: %w", err)
+		}
+		if p.config.Verbose {
+			log.Printf("Export listeners mode enabled, control socket at %s", p.controlSockPath)
+		}
 	}
 
 	// Set exit node if specified
