@@ -3,5 +3,9 @@
   "hostname": "tailproxy",
   "authkey": "",
   "proxy_port": 1080,
-  "verbose": false
+  "verbose": false,
+  "export_listeners": false,
+  "export_allow_ports": "",
+  "export_deny_ports": "",
+  "export_max": 32
 }

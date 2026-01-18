@@ -11,7 +11,10 @@ TailProxy combines LD_PRELOAD syscall interception (like proxychains) with Tails
 **Purpose**: Intercept network syscalls and redirect to SOCKS5 proxy
 
 **Intercepted Functions**:
-- `connect()` - Main interception point for TCP connections
+- `connect()` - Main interception point for outbound TCP connections
+- `bind()` - Rewrites bind addresses to loopback (export mode only)
+- `listen()` - Detects new listeners and notifies Go (export mode only)
+- `close()` - Tracks listener closure (export mode only)
 - `getaddrinfo()` - DNS resolution (passed through, not intercepted)
 - `gethostbyname()` - Legacy DNS resolution (passed through)
 
@@ -36,7 +39,37 @@ TailProxy combines LD_PRELOAD syscall interception (like proxychains) with Tails
 [0x05, 0x00, ...]  // Version 5, success
 ```
 
-### 2. Go Proxy Server (`main.go`, `proxy.go`)
+### 2. Export Listeners Mode (C Library)
+
+When `TAILPROXY_EXPORT_LISTENERS=1` is set, the preload library also intercepts server-side syscalls:
+
+**bind() Interception**:
+```c
+// Original: bind(fd, 0.0.0.0:8000)
+// Rewritten: bind(fd, 127.0.0.1:8000)
+
+// IPv4: Any non-127.x.x.x address → 127.0.0.1
+// IPv6: Any non-::1 address → ::1
+```
+
+**listen() Notification**:
+```c
+// After successful listen(), send via Unix socket:
+"LISTEN tcp4 8000\n"
+```
+
+**close() Notification**:
+```c
+// When a listener FD is closed:
+"CLOSE tcp4 8000\n"
+```
+
+**FD Tracking**:
+- Maintains a table mapping FDs to socket info (family, port, is_listener)
+- Thread-safe via pthread mutex
+- Tracks TCP sockets through bind→listen→close lifecycle
+
+### 3. Go Proxy Server (`main.go`, `proxy.go`)
 
 **Purpose**: SOCKS5 proxy that routes through Tailscale
 
@@ -61,20 +94,63 @@ The `srv.Dial()` automatically routes through:
 - Configured exit node (if specified)
 - Internet or private network destination
 
-### 3. Main Coordinator (`main.go`)
+### 4. Exporter Manager (`exporter.go`)
+
+**Purpose**: Manage tsnet listeners that forward to local services
+
+**Components**:
+- Control socket server (Unix stream socket)
+- Port exporter instances (one per exported port)
+- Port filtering (allow/deny lists)
+- Reference counting for duplicate listeners
+
+**Control Socket Protocol**:
+```
+LISTEN tcp4 <port>\n    # Start exporting port
+LISTEN tcp6 <port>\n    # Start exporting port (IPv6)
+CLOSE tcp4 <port>\n     # Stop exporting port
+CLOSE tcp6 <port>\n     # Stop exporting port (IPv6)
+```
+
+**Exporter Instance**:
+```go
+// For each exported port:
+listener, _ := tsnetServer.Listen("tcp", ":8000")
+for {
+    tsConn, _ := listener.Accept()
+    go forward(tsConn, "127.0.0.1:8000")
+}
+```
+
+**Forwarding Logic**:
+1. Accept connection from tailnet
+2. Dial local loopback on same port (try IPv4, fallback to IPv6)
+3. Bidirectional io.Copy between connections
+
+### 5. Main Coordinator (`main.go`)
 
 **Purpose**: Orchestrate proxy server and command execution
 
 **Workflow**:
 1. Parse command-line flags
 2. Start tsnet SOCKS5 proxy server in background
-3. Wait for proxy to be ready (~2 seconds)
-4. Set `LD_PRELOAD` environment variable
-5. Set `TAILPROXY_*` configuration env vars
-6. Execute user command with modified environment
-7. On command exit, stop proxy server
+3. If export mode enabled, start control socket and exporter manager
+4. Wait for proxy to be ready
+5. Set `LD_PRELOAD` environment variable
+6. Set `TAILPROXY_*` configuration env vars (including export settings)
+7. Execute user command with modified environment
+8. On command exit, stop exporters and proxy server
+
+**Environment Variables** (set for preload library):
+- `TAILPROXY_HOST` - Proxy host (127.0.0.1)
+- `TAILPROXY_PORT` - Proxy port (1080)
+- `TAILPROXY_VERBOSE` - Enable verbose logging
+- `TAILPROXY_EXPORT_LISTENERS` - Enable export mode (1 = enabled)
+- `TAILPROXY_CONTROL_SOCK` - Path to control socket
 
 ## Data Flow
+
+### Outbound Connections (Default Mode)
 
 ```
 Application calls connect("example.com", 80)
@@ -99,6 +175,34 @@ Connection established to example.com:80
 Bidirectional forwarding
            ↓
 Application reads/writes as normal
+```
+
+### Inbound Connections (Export Listeners Mode)
+
+```
+Application calls bind("0.0.0.0", 8000)
+           ↓
+[LD_PRELOAD intercepts]
+           ↓
+libtailproxy.so: bind("127.0.0.1", 8000)  # Rewritten!
+           ↓
+Application calls listen(fd, backlog)
+           ↓
+[LD_PRELOAD intercepts]
+           ↓
+libtailproxy.so: Sends "LISTEN tcp4 8000\n" to control socket
+           ↓
+Go Exporter Manager receives notification
+           ↓
+ExporterManager: tsnet.Listen("tcp", ":8000")
+           ↓
+Tailnet client connects to tailproxy:8000
+           ↓
+Exporter accepts, dials 127.0.0.1:8000
+           ↓
+Bidirectional forwarding to local app
+           ↓
+Application handles request as normal
 ```
 
 ## Exit Node Configuration
@@ -183,15 +287,16 @@ Current implementation has basic exit node support. Full support requires:
 
 1. **C Library**:
    ```bash
-   gcc -shared -fPIC -O2 -Wall -o libtailproxy.so preload.c -ldl
+   gcc -shared -fPIC -O2 -Wall -o libtailproxy.so preload.c -ldl -pthread
    ```
    - `-shared`: Create shared library
    - `-fPIC`: Position-independent code (required for shared libs)
    - `-ldl`: Link against libdl for dlsym()
+   - `-pthread`: Thread support for FD table mutex
 
 2. **Go Binary**:
    ```bash
-   go build -o tailproxy main.go config.go proxy.go
+   go build -o tailproxy main.go config.go proxy.go exporter.go
    ```
    - Must specify files explicitly (avoid compiling .c file)
    - Large binary (~32MB) due to tsnet dependencies
@@ -207,13 +312,13 @@ Current implementation has basic exit node support. Full support requires:
 6. **Performance Monitoring**: Track latency, bandwidth
 7. **Config Profiles**: Saved configurations for different scenarios
 8. **GUI**: Graphical interface for non-technical users
+9. **Export listeners idle timeout**: Auto-close unused exporters
+10. **dup/dup2/dup3 interception**: Better FD tracking for export mode
 
 ### Known Issues
-- No proper exit node preference configuration (needs LocalClient integration)
-- 2-second startup delay for proxy readiness (should wait properly)
 - No connection failure retry logic
 - Limited error messages from preload library
-- No IPv6 SOCKS5 support verification
+- Export mode: FD tracking doesn't handle dup() family
 
 ## Testing
 
@@ -235,6 +340,17 @@ Current implementation has basic exit node support. Full support requires:
 
 # Test with non-proxy-aware app
 ./tailproxy python3 -c "import urllib.request; print(urllib.request.urlopen('https://ifconfig.me').read())"
+
+# Test export listeners - bind rewrite
+./tailproxy -export-listeners -verbose python -m http.server 8000
+# Verify: server listens on 127.0.0.1:8000 (not 0.0.0.0)
+
+# Test export listeners - tailnet access
+# From another tailnet device:
+curl http://tailproxy:8000/
+
+# Test port filtering
+./tailproxy -export-listeners -export-allow-ports="8000-8100" python -m http.server 8000
 ```
 
 ## References

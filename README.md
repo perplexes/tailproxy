@@ -5,6 +5,7 @@ A Go-based proxychains alternative that routes **any** application's traffic thr
 ## Features
 
 - Routes **any** application's traffic through Tailscale (not just proxy-aware apps)
+- **Auto-export listeners**: Expose any server to your tailnet without configuration
 - Support for Tailscale exit nodes
 - SOCKS5 proxy implementation with tsnet
 - LD_PRELOAD syscall interception (like proxychains)
@@ -24,6 +25,12 @@ TailProxy uses the same technique as proxychains: **LD_PRELOAD syscall intercept
 5. Intercepts `connect()`, `getaddrinfo()`, and other network calls
 6. Redirects all TCP connections through the SOCKS5 proxy
 7. Routes all traffic through the Tailscale network
+
+When export listeners mode is enabled (`-export-listeners`), TailProxy also:
+1. Intercepts `bind()` calls and rewrites them to use loopback only
+2. Detects when your application starts listening on a port
+3. Automatically creates a tsnet listener on the same port
+4. Forwards connections from the tailnet to your local service
 
 ### Architecture
 
@@ -110,6 +117,26 @@ tailproxy -hostname=my-proxy-node curl https://ifconfig.me
 tailproxy -verbose curl https://ifconfig.me
 ```
 
+### Export Listeners (Expose Services to Tailnet)
+
+Run any server and automatically expose it to your tailnet:
+
+```bash
+# Expose a Python HTTP server to your tailnet
+tailproxy -export-listeners python -m http.server 8000
+
+# Expose a Node.js app
+tailproxy -export-listeners node server.js
+
+# With port filtering (only export specific ports)
+tailproxy -export-listeners -export-allow-ports="3000,8080" ./my-server
+```
+
+When using export listeners:
+- Your server binds **only to loopback** (127.0.0.1) - no LAN/WAN exposure
+- The same port is accessible from any device on your tailnet
+- Access via `<tailproxy-hostname>:<port>` (e.g., `tailproxy:8000`)
+
 ### Using Configuration File
 
 Create a `config.json`:
@@ -145,6 +172,16 @@ tailproxy -config=config.json curl https://ifconfig.me
     SOCKS5 proxy port (default 1080)
 -verbose
     Verbose logging
+
+Export Listeners Options:
+-export-listeners
+    Enable automatic port export via tsnet
+-export-allow-ports string
+    Comma-separated ports or ranges to allow (e.g., "3000,8080,10000-10100")
+-export-deny-ports string
+    Comma-separated ports or ranges to deny
+-export-max int
+    Maximum number of simultaneous exported ports (default 32)
 ```
 
 ## Configuration File Format
@@ -155,7 +192,11 @@ tailproxy -config=config.json curl https://ifconfig.me
   "hostname": "tailproxy",
   "authkey": "tskey-auth-xxxxx",
   "proxy_port": 1080,
-  "verbose": false
+  "verbose": false,
+  "export_listeners": false,
+  "export_allow_ports": "",
+  "export_deny_ports": "",
+  "export_max": 32
 }
 ```
 
@@ -185,6 +226,20 @@ tailproxy -exit-node=asia-exit wget https://example.com
 
 ```bash
 tailproxy -verbose ./my-app
+```
+
+### Expose a development server to teammates
+
+```bash
+# Your dev server is now accessible to your tailnet at tailproxy:3000
+tailproxy -export-listeners npm run dev
+```
+
+### Secure remote access to a database admin UI
+
+```bash
+# Expose pgAdmin only to your tailnet (not your LAN)
+tailproxy -export-listeners -export-allow-ports="5050" pgadmin4
 ```
 
 ## Supported Applications
@@ -279,6 +334,8 @@ tailproxy -verbose curl https://ifconfig.me
 - Auth keys should be kept secret and rotated regularly
 - Exit node traffic is encrypted via WireGuard
 - Local SOCKS5 proxy only listens on 127.0.0.1
+- **Export listeners mode**: Services are only exposed to your tailnet, protected by Tailscale ACLs
+- Bind address rewriting ensures services never accidentally listen on LAN/WAN interfaces
 
 ## License
 
