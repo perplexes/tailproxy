@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Build binaries
+        run: |
+          # Build for Linux AMD64
+          make clean
+          make build
+          mkdir -p release/tailproxy-${{ steps.get_version.outputs.VERSION }}-linux-amd64
+          cp tailproxy libtailproxy.so release/tailproxy-${{ steps.get_version.outputs.VERSION }}-linux-amd64/
+          cp README.md release/tailproxy-${{ steps.get_version.outputs.VERSION }}-linux-amd64/
+          cd release
+          tar czf tailproxy-${{ steps.get_version.outputs.VERSION }}-linux-amd64.tar.gz tailproxy-${{ steps.get_version.outputs.VERSION }}-linux-amd64
+          cd ..
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum tailproxy-${{ steps.get_version.outputs.VERSION }}-linux-amd64.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            release/tailproxy-${{ steps.get_version.outputs.VERSION }}-linux-amd64.tar.gz
+            release/checksums.txt
+          body: |
+            ## TailProxy ${{ steps.get_version.outputs.VERSION }}
+
+            ### Installation
+
+            Download the archive for your platform and extract it:
+
+            ```bash
+            tar xzf tailproxy-${{ steps.get_version.outputs.VERSION }}-linux-amd64.tar.gz
+            cd tailproxy-${{ steps.get_version.outputs.VERSION }}-linux-amd64
+            sudo cp tailproxy libtailproxy.so /usr/local/bin/
+            ```
+
+            ### Checksums
+
+            See `checksums.txt` for SHA256 checksums of all release artifacts.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
