@@ -23,8 +23,8 @@ $(LIB_NAME): preload.c
 
 $(BINARY_NAME): $(LIB_NAME) *.go
 	@echo "Building $(BINARY_NAME)..."
-	@mkdir -p .build
-	@TMPDIR=.build GOCACHE=.build/cache go build -o $(BINARY_NAME) main.go config.go proxy.go
+	@mkdir -p .build/cache
+	@TMPDIR=$(PWD)/.build GOCACHE=$(PWD)/.build/cache go build -o $(BINARY_NAME) main.go config.go proxy.go
 	@echo "Build complete: $(BINARY_NAME)"
 
 clean:
