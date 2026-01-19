@@ -202,6 +202,11 @@ int connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
         return real_connect(sockfd, addr, addrlen);
     }
 
+    // Only intercept IPv4 and IPv6 connections (not Unix sockets, etc.)
+    if (addr->sa_family != AF_INET && addr->sa_family != AF_INET6) {
+        return real_connect(sockfd, addr, addrlen);
+    }
+
     // Don't intercept connections to localhost or the proxy itself
     if (addr->sa_family == AF_INET) {
         struct sockaddr_in *addr_in = (struct sockaddr_in *)addr;

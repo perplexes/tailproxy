@@ -287,20 +287,30 @@ func (em *ExporterManager) forwardConnection(ctx context.Context, tsConn net.Con
 		log.Printf("Forwarding connection to local port %d", port)
 	}
 
-	// Bidirectional copy
+	// Bidirectional copy with proper half-close handling
 	var wg sync.WaitGroup
 	wg.Add(2)
+
+	// Helper to close write side of connection if supported
+	closeWrite := func(conn net.Conn) {
+		type closeWriter interface {
+			CloseWrite() error
+		}
+		if cw, ok := conn.(closeWriter); ok {
+			cw.CloseWrite()
+		}
+	}
 
 	go func() {
 		defer wg.Done()
 		io.Copy(localConn, tsConn)
-		localConn.(*net.TCPConn).CloseWrite()
+		closeWrite(localConn)
 	}()
 
 	go func() {
 		defer wg.Done()
 		io.Copy(tsConn, localConn)
-		tsConn.(*net.TCPConn).CloseWrite()
+		closeWrite(tsConn)
 	}()
 
 	wg.Wait()
