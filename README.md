@@ -2,6 +2,8 @@
 
 A Go-based proxychains alternative that routes **any** application's traffic through a Tailscale network and exit node using `tsnet` and `LD_PRELOAD`. Useful if you're in an environment where you can't install tailscale (like https://sprites.dev) and you want to access machines/apps on your tailnet, or want to route traffic through an exit node you control (much faster than trying to setup a socks proxy somewhere).
 
+AND you can put it in reverse mode to SERVE any application's traffic and make it accessible through your tailnet! Think instant python http server or instant [claude-code-webui](https://github.com/sugyan/claude-code-webui), all without installing tailscale.
+
 ## Features
 
 - Routes **any** application's traffic through Tailscale (not just proxy-aware apps)
